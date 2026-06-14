@@ -1,8 +1,0 @@
-﻿Title: 
-Date: 
-Tags: 
-
-# Notes
-
-- 
-
