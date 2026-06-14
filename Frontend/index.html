@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Device Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <header class="flex items-center justify-between mb-8 pb-4 border-b border-slate-800">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-server text-indigo-500 text-3xl"></i>
+                <div>
+                    <h1 class="text-2xl font-bold tracking-tight">Interlink</h1>
+                    <p class="text-xs text-slate-400">Real-time device latency monitor</p>
+                </div>
+            </div>
+            <span class="bg-indigo-500/10 text-indigo-400 text-xs px-2.5 py-1 rounded-full font-mono border border-indigo-500/20">
+                v1.0.0
+            </span>
+        </header>
+
+        <main class="space-y-6">
+            <div class="bg-slate-800/50 border border-slate-700/50 p-6 rounded-2xl shadow-xl backdrop-blur-sm">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4">Ping a New Device</h2>
+                <form id="pingForm" class="flex flex-col sm:flex-row gap-3">
+                    <div class="relative flex-1">
+                        <i class="fa-solid fa-network-wired absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"></i>
+                        <input 
+                            type="text" 
+                            id="ipInput" 
+                            placeholder="Enter IP Address (e.g., 192.168.1.1)" 
+                            required
+                            class="w-full bg-slate-900 border border-slate-700 rounded-xl pl-11 pr-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
+                        >
+                    </div>
+                    <button 
+                        type="submit" 
+                        id="submitBtn"
+                        class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-6 py-3 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98"
+                    >
+                        <i class="fa-solid fa-satellite-dish"></i>
+                        <span>Check Device</span>
+                    </button>
+                </form>
+            </div>
+
+            <div>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Monitored Inventory</h2>
+                    <button id="clearAll" class="text-xs text-slate-500 hover:text-rose-400 transition-colors hidden flex items-center gap-1 cursor-pointer">
+                        <i class="fa-solid fa-trash-can"></i> Clear Grid
+                    </button>
+                </div>
+
+                <div id="emptyState" class="text-center py-12 border-2 border-dashed border-slate-800 rounded-2xl">
+                    <i class="fa-solid fa-circle-nodes text-slate-700 text-4xl mb-3"></i>
+                    <p class="text-slate-500 text-sm">No devices checked yet. Enter an IP address above to begin.</p>
+                </div>
+
+                <div id="devicesGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // CONFIGURATION: Update this if your FastAPI backend runs on a different port/host
+        const API_BASE_URL = 'http://127.0.0.1:8000';
+
+        const pingForm = document.getElementById('pingForm');
+        const ipInput = document.getElementById('ipInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const devicesGrid = document.getElementById('devicesGrid');
+        const emptyState = document.getElementById('emptyState');
+        const clearAllBtn = document.getElementById('clearAll');
+
+        // Store active devices to prevent duplicates in the UI dashboard view
+        const trackedDevices = new Map();
+
+        pingForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const ip = ipInput.value.trim();
+            if (!ip) return;
+
+            // Update UI to Loading State
+            setLoading(true);
+            
+            // Create or update a temporary card with a loading spinner
+            upsertDeviceCard({ ip, status: 'pending' });
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/check?ip=${encodeURIComponent(ip)}`);
+                
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.detail || `Server error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                upsertDeviceCard(data);
+            } catch (error) {
+                console.error("Ping Request Failed:", error);
+                upsertDeviceCard({ 
+                    ip, 
+                    status: 'error', 
+                    error_details: error.message || 'Failed to reach API server'
+                });
+            } finally {
+                setLoading(false);
+                ipInput.value = ''; // Reset input
+            }
+        });
+
+        clearAllBtn.addEventListener('click', () => {
+            trackedDevices.clear();
+            renderGrid();
+        });
+
+        function setLoading(isLoading) {
+            if (isLoading) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> <span>Pinging...</span>`;
+                submitBtn.classList.add('opacity-75');
+            } else {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = `<i class="fa-solid fa-satellite-dish"></i> <span>Check Device</span>`;
+                submitBtn.classList.remove('opacity-75');
+            }
+        }
+
+        function upsertDeviceCard(deviceData) {
+            // Keep dynamic track of devices inside Map
+            trackedDevices.set(deviceData.ip, deviceData);
+            renderGrid();
+        }
+
+        function renderGrid() {
+            if (trackedDevices.size === 0) {
+                emptyState.classList.remove('hidden');
+                clearAllBtn.classList.add('hidden');
+                devicesGrid.innerHTML = '';
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+            clearAllBtn.classList.remove('hidden');
+
+            devicesGrid.innerHTML = Array.from(trackedDevices.values()).map(device => {
+                let statusBadge = '';
+                let borderClass = 'border-slate-800';
+                let latencyDisplay = '';
+                let statusIcon = '';
+
+                if (device.status === 'online') {
+                    borderClass = 'border-emerald-500/30 bg-emerald-500/5';
+                    statusIcon = '<i class="fa-solid fa-circle text-emerald-500 animate-pulse text-xs"></i>';
+                    statusBadge = `<span class="bg-emerald-500/10 text-emerald-400 text-xs px-2.5 py-0.5 rounded-md font-medium border border-emerald-500/20">Online</span>`;
+                    latencyDisplay = `
+                        <div class="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-sm">
+                            <span class="text-slate-400">Latency</span>
+                            <span class="font-mono font-bold text-emerald-400">${device.latency_ms} ms</span>
+                        </div>`;
+                } else if (device.status === 'offline') {
+                    borderClass = 'border-rose-500/30 bg-rose-500/5';
+                    statusIcon = '<i class="fa-solid fa-circle text-rose-500 text-xs"></i>';
+                    statusBadge = `<span class="bg-rose-500/10 text-rose-400 text-xs px-2.5 py-0.5 rounded-md font-medium border border-rose-500/20">Offline</span>`;
+                    latencyDisplay = `
+                        <div class="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-sm text-slate-500">
+                            <span>Latency</span>
+                            <span class="font-mono">—</span>
+                        </div>`;
+                } else if (device.status === 'error') {
+                    borderClass = 'border-amber-500/30 bg-amber-500/5';
+                    statusIcon = '<i class="fa-solid fa-circle-exclamation text-amber-500 text-xs"></i>';
+                    statusBadge = `<span class="bg-amber-500/10 text-amber-400 text-xs px-2.5 py-0.5 rounded-md font-medium border border-amber-500/20">Error</span>`;
+                    latencyDisplay = `
+                        <div class="mt-2 text-xs text-amber-500/80 bg-amber-500/5 p-2 rounded-lg border border-amber-500/10 italic">
+                            ${device.error_details || 'Execution failed.'}
+                        </div>`;
+                } else if (device.status === 'pending') {
+                    borderClass = 'border-indigo-500/20 bg-indigo-500/5 animate-pulse';
+                    statusIcon = '<i class="fa-solid fa-spinner text-indigo-500 animate-spin text-xs"></i>';
+                    statusBadge = `<span class="bg-indigo-500/10 text-indigo-400 text-xs px-2.5 py-0.5 rounded-md font-medium">Pinging...</span>`;
+                }
+
+                return `
+                    <div class="bg-slate-800/40 border ${borderClass} rounded-xl p-5 flex flex-col justify-between transition-all duration-300">
+                        <div>
+                            <div class="flex justify-between items-start gap-2 mb-2">
+                                <div class="flex items-center gap-2">
+                                    ${statusIcon}
+                                    <h3 class="font-mono font-semibold text-slate-200 tracking-wide break-all">${device.ip}</h3>
+                                </div>
+                                ${statusBadge}
+                            </div>
+                        </div>
+                        ${latencyDisplay}
+                    </div>
+                `;
+            }).join('');
+        }
+    </script>
+</body>
+</html>
